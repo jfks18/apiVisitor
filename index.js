@@ -23,6 +23,9 @@ app.use(cors({
 
 app.use(express.json());
 
+// Health check
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
 app.use((req, res, next) => {
   res.setHeader('ngrok-skip-browser-warning', 'true');
   next();

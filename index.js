@@ -8,7 +8,7 @@ const app = express();
 
 const cors = require('cors');
 app.use(cors({
-    origin: true, // Reflects the request origin (allows any origin)
+    origin: 'https://visitormonitoring.onrender.com', // Reflects the request origin (allows any origin)
     credentials: true,
     allowedHeaders: [
         'Origin',

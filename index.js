@@ -26,6 +26,15 @@ app.use(express.json());
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+// Simple request logger to help debug Render requests
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.originalUrl}`);
+    next();
+});
+
+// Root route so accessing '/' returns 200 instead of Not Found
+app.get('/', (req, res) => res.json({ status: 'ok', message: 'Visitor Monitoring API' }));
+
 app.use((req, res, next) => {
   res.setHeader('ngrok-skip-browser-warning', 'true');
   next();

@@ -580,6 +580,97 @@ app.get('/api/users/:id', async (req, res) => {
     }
 });
 
+// ---------------- office_visits endpoints ----------------
+// GET /api/office_visits - list visits, optional filters ?visitorsID=&dept_id=&prof_id=
+app.get('/api/office_visits', async (req, res) => {
+    const { visitorsID, dept_id, prof_id } = req.query;
+    try {
+        let query = 'SELECT * FROM office_visits';
+        const clauses = [];
+        const params = [];
+        if (visitorsID) { clauses.push('visitorsID = ?'); params.push(visitorsID); }
+        if (dept_id) { clauses.push('dept_id = ?'); params.push(dept_id); }
+        if (prof_id) { clauses.push('prof_id = ?'); params.push(prof_id); }
+        if (clauses.length) query += ' WHERE ' + clauses.join(' AND ');
+        query += ' ORDER BY createdAt DESC';
+        const [rows] = await db.execute(query, params);
+        res.json(rows);
+    } catch (err) {
+        console.error('Error fetching office_visits:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// GET /api/office_visits/:id - get single visit
+app.get('/api/office_visits/:id', async (req, res) => {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ message: 'Visit id is required' });
+    try {
+        const [rows] = await db.execute('SELECT * FROM office_visits WHERE id = ?', [id]);
+        if (rows.length === 0) return res.status(404).json({ message: 'Visit not found' });
+        res.json(rows[0]);
+    } catch (err) {
+        console.error('Error fetching office_visit:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// POST /api/office_visits - create a new office visit
+app.post('/api/office_visits', async (req, res) => {
+    const { visitorsID, dept_id, prof_id, purpose } = req.body;
+    if (!visitorsID || !dept_id || !prof_id || !purpose) {
+        return res.status(400).json({ message: 'visitorsID, dept_id, prof_id and purpose are required' });
+    }
+    try {
+        const [result] = await db.execute(
+            'INSERT INTO office_visits (visitorsID, dept_id, prof_id, purpose) VALUES (?, ?, ?, ?)',
+            [visitorsID, dept_id, prof_id, purpose]
+        );
+        res.status(201).json({ message: 'Visit created', id: result.insertId });
+    } catch (err) {
+        console.error('Error creating office_visit:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// PUT /api/office_visits/:id - update a visit
+app.put('/api/office_visits/:id', async (req, res) => {
+    const { id } = req.params;
+    const { visitorsID, dept_id, prof_id, purpose } = req.body;
+    if (!id) return res.status(400).json({ message: 'Visit id is required' });
+    try {
+        const fields = [];
+        const values = [];
+        if (visitorsID !== undefined) { fields.push('visitorsID = ?'); values.push(visitorsID); }
+        if (dept_id !== undefined) { fields.push('dept_id = ?'); values.push(dept_id); }
+        if (prof_id !== undefined) { fields.push('prof_id = ?'); values.push(prof_id); }
+        if (purpose !== undefined) { fields.push('purpose = ?'); values.push(purpose); }
+        if (fields.length === 0) return res.status(400).json({ message: 'No fields provided to update' });
+        values.push(id);
+        const [result] = await db.execute(`UPDATE office_visits SET ${fields.join(', ')} WHERE id = ?`, values);
+        if (result.affectedRows === 0) return res.status(404).json({ message: 'Visit not found' });
+        res.json({ message: 'Visit updated', id });
+    } catch (err) {
+        console.error('Error updating office_visit:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// DELETE /api/office_visits/:id - delete a visit
+app.delete('/api/office_visits/:id', async (req, res) => {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ message: 'Visit id is required' });
+    try {
+        const [result] = await db.execute('DELETE FROM office_visits WHERE id = ?', [id]);
+        if (result.affectedRows === 0) return res.status(404).json({ message: 'Visit not found' });
+        res.json({ message: 'Visit deleted', id });
+    } catch (err) {
+        console.error('Error deleting office_visit:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+
 
 app.post('/api/departments', async (req, res) => {
     const { name } = req.body;

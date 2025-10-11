@@ -269,9 +269,11 @@ app.post('/api/login', async (req, res) => {
             return res.status(401).json({ message: 'Invalid username or password.' });
         }
         const adminToken = crypto.randomBytes(32).toString('hex');
-        await db.execute('UPDATE users SET token = ? WHERE id = ?', [adminToken, user.id]);
-        const { password: _, ...userWithoutPassword } = user;
-        res.json({ message: 'Login successful', user: { ...userWithoutPassword, adminToken } });
+        // set token and mark status active
+        await db.execute('UPDATE users SET token = ?, status = ? WHERE id = ?', [adminToken, 'active', user.id]);
+        const [updatedRows] = await db.execute('SELECT id, username, email, phone, dept_id, token, status, createdAt FROM users WHERE id = ?', [user.id]);
+        const userUpdated = updatedRows[0];
+        res.json({ message: 'Login successful', user: userUpdated });
     } catch (error) {
         console.error('Login error:', error);
         res.status(500).json({ message: 'Internal server error' });
@@ -284,8 +286,10 @@ app.post('/api/logout', async (req, res) => {
         return res.status(400).json({ message: 'Username is required.' });
     }
     try {
-        await db.execute('UPDATE users SET token = NULL WHERE username = ?', [username]);
-        res.json({ message: 'Logout successful' });
+        // Clear token and set status to inactive
+        const [result] = await db.execute('UPDATE users SET token = NULL, status = ? WHERE username = ?', ['inactive', username]);
+        if (result.affectedRows === 0) return res.status(404).json({ message: 'User not found' });
+        res.json({ message: 'Logout successful', username });
     } catch (error) {
         console.error('Logout error:', error);
         res.status(500).json({ message: 'Internal server error' });

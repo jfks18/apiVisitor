@@ -280,13 +280,13 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+// Logout - clear token and set status inactive
 app.post('/api/logout', async (req, res) => {
     const { username } = req.body;
     if (!username) {
         return res.status(400).json({ message: 'Username is required.' });
     }
     try {
-        // Clear token and set status to inactive
         const [result] = await db.execute('UPDATE users SET token = NULL, status = ? WHERE username = ?', ['inactive', username]);
         if (result.affectedRows === 0) return res.status(404).json({ message: 'User not found' });
         res.json({ message: 'Logout successful', username });
@@ -296,6 +296,27 @@ app.post('/api/logout', async (req, res) => {
     }
 });
 
+app.post('/api/users', async (req, res) => {
+    const { username, email, phone, password, dept_id, status } = req.body;
+    if (!username || !email || !phone || !password) {
+        return res.status(400).json({ message: 'username, email, phone and password are required' });
+    }
+    try {
+        const hashed = await bcrypt.hash(password, 10);
+        // default status to 'inactive' if not provided
+        const finalStatus = status || 'inactive';
+        const [result] = await db.execute(
+            'INSERT INTO users (username, email, phone, password, dept_id, status) VALUES (?, ?, ?, ?, ?, ?)',
+            [username, email, phone, hashed, dept_id || null, finalStatus]
+        );
+        res.status(201).json({ message: 'User created', id: result.insertId, status: finalStatus });
+    } catch (err) {
+        console.error('Error creating user:', err);
+        if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'User already exists' });
+        res.status(500).json({ message: 'Internal server error' });
+
+
+// POST /api/offices - Add a new office
 app.post('/api/offices', async (req, res) => {
     const { department } = req.body;
     if (!department) {
@@ -489,7 +510,7 @@ app.get('/api/departments', async (req, res) => {
 // --- Users CRUD for department accounts ---
 // Create user
 app.post('/api/users', async (req, res) => {
-    const { username, email, phone, password, dept_id } = req.body;
+    const { username, email, phone, password, dept_id, status } = req.body;
     if (!username || !email || !phone || !password) {
         return res.status(400).json({ message: 'username, email, phone and password are required' });
     }
@@ -518,7 +539,8 @@ app.put('/api/users/:id', async (req, res) => {
         if (username !== undefined) { fields.push('username = ?'); values.push(username); }
         if (email !== undefined) { fields.push('email = ?'); values.push(email); }
         if (phone !== undefined) { fields.push('phone = ?'); values.push(phone); }
-        if (dept_id !== undefined) { fields.push('dept_id = ?'); values.push(dept_id); }
+    if (dept_id !== undefined) { fields.push('dept_id = ?'); values.push(dept_id); }
+    if (status !== undefined) { fields.push('status = ?'); values.push(status); }
         if (password !== undefined) {
             const hashed = await bcrypt.hash(password, 10);
             fields.push('password = ?');
@@ -553,7 +575,7 @@ app.delete('/api/users/:id', async (req, res) => {
 app.get('/api/users', async (req, res) => {
     const { dept_id } = req.query;
     try {
-        let query = 'SELECT id, username, email, phone, dept_id, token, createdAt FROM users';
+    let query = 'SELECT id, username, email, phone, dept_id, token, status, createdAt FROM users';
         const params = [];
         if (dept_id) {
             query += ' WHERE dept_id = ?';
@@ -562,7 +584,7 @@ app.get('/api/users', async (req, res) => {
         query += ' ORDER BY createdAt DESC';
         const [rows] = await db.execute(query, params);
         // Do not return password
-        const users = rows.map(u => ({ ...u, password: undefined }));
+    const users = rows.map(u => ({ ...u, password: undefined }));
         res.json(users);
     } catch (err) {
         console.error('Error fetching users:', err);
@@ -575,7 +597,7 @@ app.get('/api/users/:id', async (req, res) => {
     const { id } = req.params;
     if (!id) return res.status(400).json({ message: 'User id is required' });
     try {
-        const [rows] = await db.execute('SELECT id, username, email, phone, dept_id, token, createdAt FROM users WHERE id = ?', [id]);
+    const [rows] = await db.execute('SELECT id, username, email, phone, dept_id, token, status, createdAt FROM users WHERE id = ?', [id]);
         if (rows.length === 0) return res.status(404).json({ message: 'User not found' });
         res.json(rows[0]);
     } catch (err) {

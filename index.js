@@ -8,16 +8,18 @@ const app = express();
 
 const cors = require('cors');
 app.use(cors({
-    origin: 'https://visitormonitoring.onrender.com', // Reflects the request origin (allows any origin)
+    origin: ['https://visitormonitoring.onrender.com', 'http://localhost:3000'],
     credentials: true,
     allowedHeaders: [
         'Origin',
         'X-Requested-With',
         'Content-Type',
         'Accept',
+        'access-control-allow-origin',
         'Authorization',
         'ngrok-skip-browser-warning'
     ],
+    preflightContinue: false,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE']
 }));
 
@@ -470,6 +472,109 @@ app.put('/api/professors/:id', async (req, res) => {
 });
 
 
+app.get('/api/departments', async (req, res) => {
+    try {
+        const [rows] = await db.execute('SELECT * FROM department');
+        res.json(rows);
+    } catch (error) {
+        console.error('Error fetching departments:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// --- Users CRUD for department accounts ---
+// Create user
+app.post('/api/users', async (req, res) => {
+    const { username, email, phone, password, dept_id } = req.body;
+    if (!username || !email || !phone || !password) {
+        return res.status(400).json({ message: 'username, email, phone and password are required' });
+    }
+    try {
+        const hashed = await bcrypt.hash(password, 10);
+        const [result] = await db.execute(
+            'INSERT INTO users (username, email, phone, password, dept_id) VALUES (?, ?, ?, ?, ?)',
+            [username, email, phone, hashed, dept_id || null]
+        );
+        res.status(201).json({ message: 'User created', id: result.insertId });
+    } catch (err) {
+        console.error('Error creating user:', err);
+        if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'User already exists' });
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// Update user
+app.put('/api/users/:id', async (req, res) => {
+    const { id } = req.params;
+    const { username, email, phone, password, dept_id } = req.body;
+    if (!id) return res.status(400).json({ message: 'User id is required' });
+    try {
+        const fields = [];
+        const values = [];
+        if (username !== undefined) { fields.push('username = ?'); values.push(username); }
+        if (email !== undefined) { fields.push('email = ?'); values.push(email); }
+        if (phone !== undefined) { fields.push('phone = ?'); values.push(phone); }
+        if (dept_id !== undefined) { fields.push('dept_id = ?'); values.push(dept_id); }
+        if (password !== undefined) {
+            const hashed = await bcrypt.hash(password, 10);
+            fields.push('password = ?');
+            values.push(hashed);
+        }
+        if (fields.length === 0) return res.status(400).json({ message: 'No fields provided to update' });
+        values.push(id);
+        const [result] = await db.execute(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, values);
+        if (result.affectedRows === 0) return res.status(404).json({ message: 'User not found' });
+        res.json({ message: 'User updated', id });
+    } catch (err) {
+        console.error('Error updating user:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// Delete user
+app.delete('/api/users/:id', async (req, res) => {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ message: 'User id is required' });
+    try {
+        const [result] = await db.execute('DELETE FROM users WHERE id = ?', [id]);
+        if (result.affectedRows === 0) return res.status(404).json({ message: 'User not found' });
+        res.json({ message: 'User deleted', id });
+    } catch (err) {
+        console.error('Error deleting user:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+app.post('/api/departments', async (req, res) => {
+    const { name } = req.body;
+    if (!name) {
+        return res.status(400).json({ message: 'Department name is required.' });
+    }
+    try {
+        const [result] = await db.promise().execute('INSERT INTO department (dept_name) VALUES (?)', [name]);
+        res.status(201).json({ message: 'Department created successfully', id: result.insertId, name });
+    } catch (error) {
+        console.error('Error creating department:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+app.delete('/api/departments/:id', async (req, res) => {
+    const { id } = req.params; 
+    if (!id) {
+        return res.status(400).json({ message: 'Department ID is required.' });
+    }
+    try {
+        const [result] = await db.promise().execute('DELETE FROM department WHERE id = ?', [id]);
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Department not found.' });
+        }
+        res.json({ message: 'Department deleted successfully', id });
+    } catch (error) {
+        console.error('Error deleting department:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
 
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {

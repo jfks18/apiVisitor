@@ -545,6 +545,42 @@ app.delete('/api/users/:id', async (req, res) => {
     }
 });
 
+// GET /api/users - list users (optional ?dept_id=)
+app.get('/api/users', async (req, res) => {
+    const { dept_id } = req.query;
+    try {
+        let query = 'SELECT id, username, email, phone, dept_id, token, createdAt FROM users';
+        const params = [];
+        if (dept_id) {
+            query += ' WHERE dept_id = ?';
+            params.push(dept_id);
+        }
+        query += ' ORDER BY createdAt DESC';
+        const [rows] = await db.execute(query, params);
+        // Do not return password
+        const users = rows.map(u => ({ ...u, password: undefined }));
+        res.json(users);
+    } catch (err) {
+        console.error('Error fetching users:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// GET /api/users/:id - get single user (omit password)
+app.get('/api/users/:id', async (req, res) => {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ message: 'User id is required' });
+    try {
+        const [rows] = await db.execute('SELECT id, username, email, phone, dept_id, token, createdAt FROM users WHERE id = ?', [id]);
+        if (rows.length === 0) return res.status(404).json({ message: 'User not found' });
+        res.json(rows[0]);
+    } catch (err) {
+        console.error('Error fetching user:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+
 app.post('/api/departments', async (req, res) => {
     const { name } = req.body;
     if (!name) {

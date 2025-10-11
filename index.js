@@ -314,7 +314,8 @@ app.post('/api/users', async (req, res) => {
         console.error('Error creating user:', err);
         if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'User already exists' });
         res.status(500).json({ message: 'Internal server error' });
-
+    }
+});
 
 // POST /api/offices - Add a new office
 app.post('/api/offices', async (req, res) => {

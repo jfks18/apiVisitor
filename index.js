@@ -52,15 +52,13 @@ app.post('/api/visitorsdata', async (req, res) => {
         suffix,
         gender,
         birth_date,
-        purpose_of_visit,
-        faculty_to_visit,
         address,
         phone
     } = req.body;
 
     try {
         const [result] = await db.execute(
-            'INSERT INTO visitorsdata (visitorsID, first_name, middle_name, last_name, suffix, gender, birth_date, purpose_of_visit, faculty_to_visit, address, phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO visitorsdata (visitorsID, first_name, middle_name, last_name, suffix, gender, birth_date, address, phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             [
                 visitorsID ?? null,
                 first_name ?? null,
@@ -69,8 +67,6 @@ app.post('/api/visitorsdata', async (req, res) => {
                 suffix ?? null,
                 gender ?? null,
                 birth_date ?? null,
-                purpose_of_visit ?? null,
-                JSON.stringify(faculty_to_visit ?? []),
                 address ?? null,
                 phone ?? null
             ]
@@ -697,6 +693,77 @@ app.delete('/api/office_visits/:id', async (req, res) => {
     }
 });
 
+// PUT /api/office_visits/by-visitors/:visitorsID - update the latest visit for a visitorsID
+// PUT /api/office_visits/by-visitors/:visitorsID - update the latest visit for a visitorsID
+app.put('/api/office_visits/by-visitors/:visitorsID', async (req, res) => {
+  const { visitorsID } = req.params;
+  // Accept dept_id, prof_id, purpose, qr_tagged
+  let { dept_id, prof_id, purpose, qr_tagged } = req.body;
+
+  if (!visitorsID) return res.status(400).json({ message: 'visitorsID is required' });
+
+  // Normalize qr_tagged to numeric 0/1 when present
+  if (qr_tagged !== undefined) {
+    // handle boolean or numeric string
+    qr_tagged = (qr_tagged === true || qr_tagged === '1' || qr_tagged === 1) ? 1 : 0;
+  }
+
+  try {
+    // If you want to restrict to a particular dept (recommended), you can either:
+    // 1) Use dept_id provided in body to find the latest visit for that dept, or
+    // 2) Use req.user.dept_id (if you have authentication middleware) to enforce the logged-in user's dept.
+    //
+    // Example: prefer to find the latest visit for the specific dept_id if provided, otherwise latest overall.
+    const selectParams = [visitorsID];
+    let selectSql = 'SELECT id, dept_id, qr_tagged FROM office_visits WHERE visitorsID = ?';
+
+    if (dept_id !== undefined && dept_id !== null && dept_id !== '') {
+      // prefer latest visit for that dept
+      selectSql += ' AND dept_id = ?';
+      selectParams.push(dept_id);
+    }
+    selectSql += ' ORDER BY createdAt DESC LIMIT 1';
+
+    const [rows] = await db.execute(selectSql, selectParams);
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ message: 'No visit found for this visitorsID' });
+    }
+
+    const visitId = rows[0].id;
+
+    // Optional: enforce that the logged-in user's department matches the visit's dept
+    // (uncomment if you have authentication and req.user set)
+    /*
+    const userDept = req.user?.dept_id ?? null;
+    if (userDept && String(rows[0].dept_id) !== String(userDept)) {
+      return res.status(403).json({ message: 'Forbidden: your department does not match this visit' });
+    }
+    */
+
+    // Build update
+    const fields = [];
+    const values = [];
+
+    if (dept_id !== undefined) { fields.push('dept_id = ?'); values.push(dept_id); }
+    if (prof_id !== undefined) { fields.push('prof_id = ?'); values.push(prof_id); }
+    if (purpose !== undefined) { fields.push('purpose = ?'); values.push(purpose); }
+    if (qr_tagged !== undefined) { fields.push('qr_tagged = ?'); values.push(qr_tagged); }
+
+    if (fields.length === 0) return res.status(400).json({ message: 'No fields provided to update' });
+
+    values.push(visitId);
+    const [result] = await db.execute(`UPDATE office_visits SET ${fields.join(', ')} WHERE id = ?`, values);
+
+    if (result.affectedRows === 0) return res.status(404).json({ message: 'Visit not found' });
+
+    // Optional: return the updated row to the client for confirmation
+    const [updatedRows] = await db.execute('SELECT * FROM office_visits WHERE id = ?', [visitId]);
+    res.json({ message: 'Visit updated', id: visitId, visit: updatedRows[0] });
+  } catch (err) {
+    console.error('Error updating latest office_visit:', err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
 
 
 app.post('/api/departments', async (req, res) => {

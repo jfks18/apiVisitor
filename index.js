@@ -119,9 +119,27 @@ app.post('/api/visitorslog/timeout', async (req, res) => {
     if (!visitorsID) {
         return res.status(400).json({ message: 'visitorsID is required' });
     }
-    const now = new Date();
-    const timeOut = now.toTimeString().split(' ')[0];
     try {
+        // Compute Manila date and time
+        const manilaDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date()); // YYYY-MM-DD
+        const timeOut = new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'Asia/Manila', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit'
+        }).format(new Date()); // HH:mm:ss
+
+        // Validate that all today's office visits for this visitor are tagged (qr_tagged = 1)
+        const [checkRows] = await db.execute(
+            'SELECT COUNT(*) AS total, SUM(CASE WHEN qr_tagged = 1 THEN 1 ELSE 0 END) AS tagged FROM office_visits WHERE visitorsID = ? AND DATE(createdAt) = ?',
+            [visitorsID, manilaDate]
+        );
+        const { total, tagged } = checkRows[0] || { total: 0, tagged: 0 };
+        if (!total || total === 0) {
+            return res.status(400).json({ message: 'No office visits found for today for this visitor', visitorsID, date: manilaDate });
+        }
+        if (Number(tagged) < Number(total)) {
+            return res.status(400).json({ message: 'Not all offices have been tagged for today', visitorsID, date: manilaDate, tagged: Number(tagged), total: Number(total) });
+        }
+
+        // All tagged, proceed to timeout update (keep existing schema column name casing)
         await db.execute('UPDATE visitorslog SET timeout = ? WHERE visitorsID = ?', [timeOut, visitorsID]);
         res.status(200).json({ message: 'Time out recorded', visitorsID, timeOut });
     } catch (error) {
@@ -255,19 +273,31 @@ app.post('/api/login', async (req, res) => {
         return res.status(400).json({ message: 'Username and password are required.' });
     }
     try {
+        console.log('Login attempt:', { username });
         const [rows] = await db.execute('SELECT * FROM users WHERE username = ?', [username]);
+        console.log('User query returned:', rows.length, 'row(s)');
         if (rows.length === 0) {
             return res.status(401).json({ message: 'Invalid username or password.' });
         }
         const user = rows[0];
+        console.log('User role info:', { role: user?.role ?? null, role_id: user?.role_id ?? null });
+        if (user?.role_id !== undefined && user?.role_id !== null) {
+            try {
+                const [roleRows] = await db.execute('SELECT * FROM roles WHERE id = ?', [user.role_id]);
+                console.log('Role lookup result:', roleRows && roleRows[0] ? roleRows[0] : null);
+            } catch (roleErr) {
+                console.error('Role lookup error:', roleErr);
+            }
+        }
         const passwordMatch = await bcrypt.compare(password, user.password);
+        console.log('Password match:', passwordMatch);
         if (!passwordMatch) {
             return res.status(401).json({ message: 'Invalid username or password.' });
         }
         const adminToken = crypto.randomBytes(32).toString('hex');
         // set token and mark status active
         await db.execute('UPDATE users SET token = ?, status = ? WHERE id = ?', [adminToken, 'active', user.id]);
-        const [updatedRows] = await db.execute('SELECT id, username, email, phone, dept_id, token, status, createdAt FROM users WHERE id = ?', [user.id]);
+        const [updatedRows] = await db.execute('SELECT id, username, email, phone, dept_id, token, role , status, createdAt FROM users WHERE id = ?', [user.id]);
         const userUpdated = updatedRows[0];
         res.json({ message: 'Login successful', user: userUpdated });
     } catch (error) {
@@ -505,30 +535,11 @@ app.get('/api/departments', async (req, res) => {
 });
 
 // --- Users CRUD for department accounts ---
-// Create user
-app.post('/api/users', async (req, res) => {
-    const { username, email, phone, password, dept_id, status } = req.body;
-    if (!username || !email || !phone || !password) {
-        return res.status(400).json({ message: 'username, email, phone and password are required' });
-    }
-    try {
-        const hashed = await bcrypt.hash(password, 10);
-        const [result] = await db.execute(
-            'INSERT INTO users (username, email, phone, password, dept_id) VALUES (?, ?, ?, ?, ?)',
-            [username, email, phone, hashed, dept_id || null]
-        );
-        res.status(201).json({ message: 'User created', id: result.insertId });
-    } catch (err) {
-        console.error('Error creating user:', err);
-        if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'User already exists' });
-        res.status(500).json({ message: 'Internal server error' });
-    }
-});
 
 // Update user
 app.put('/api/users/:id', async (req, res) => {
     const { id } = req.params;
-    const { username, email, phone, password, dept_id } = req.body;
+    const { username, email, phone, password, dept_id, status } = req.body;
     if (!id) return res.status(400).json({ message: 'User id is required' });
     try {
         const fields = [];
@@ -693,77 +704,30 @@ app.delete('/api/office_visits/:id', async (req, res) => {
     }
 });
 
-// PUT /api/office_visits/by-visitors/:visitorsID - update the latest visit for a visitorsID
-// PUT /api/office_visits/by-visitors/:visitorsID - update the latest visit for a visitorsID
-app.put('/api/office_visits/by-visitors/:visitorsID', async (req, res) => {
-  const { visitorsID } = req.params;
-  // Accept dept_id, prof_id, purpose, qr_tagged
-  let { dept_id, prof_id, purpose, qr_tagged } = req.body;
-
-  if (!visitorsID) return res.status(400).json({ message: 'visitorsID is required' });
-
-  // Normalize qr_tagged to numeric 0/1 when present
-  if (qr_tagged !== undefined) {
-    // handle boolean or numeric string
-    qr_tagged = (qr_tagged === true || qr_tagged === '1' || qr_tagged === 1) ? 1 : 0;
-  }
-
-  try {
-    // If you want to restrict to a particular dept (recommended), you can either:
-    // 1) Use dept_id provided in body to find the latest visit for that dept, or
-    // 2) Use req.user.dept_id (if you have authentication middleware) to enforce the logged-in user's dept.
-    //
-    // Example: prefer to find the latest visit for the specific dept_id if provided, otherwise latest overall.
-    const selectParams = [visitorsID];
-    let selectSql = 'SELECT id, dept_id, qr_tagged FROM office_visits WHERE visitorsID = ?';
-
-    if (dept_id !== undefined && dept_id !== null && dept_id !== '') {
-      // prefer latest visit for that dept
-      selectSql += ' AND dept_id = ?';
-      selectParams.push(dept_id);
+app.post('/api/office_visits/scan', async (req, res) => {
+    const { visitorsID, dept_id } = req.body;
+    console.log('Scanner received:', { visitorsID, dept_id });
+    if (!visitorsID || !dept_id) {
+        return res.status(400).json({ message: 'visitorsID and dept_id are required' });
     }
-    selectSql += ' ORDER BY createdAt DESC LIMIT 1';
-
-    const [rows] = await db.execute(selectSql, selectParams);
-    if (!rows || rows.length === 0) {
-      return res.status(404).json({ message: 'No visit found for this visitorsID' });
+    try {
+        // Find latest visit for this visitorsID
+        const [rows] = await db.execute('SELECT id, dept_id FROM office_visits WHERE visitorsID = ? ORDER BY createdAt DESC LIMIT 1', [visitorsID]);
+        if (rows.length === 0) return res.status(404).json({ message: 'No visit found for this visitorsID' });
+        const visit = rows[0];
+        if (String(visit.dept_id) !== String(dept_id)) {
+            return res.status(403).json({ message: 'Department mismatch' });
+        }
+        // Update qr_tagged to 1
+        const [result] = await db.execute('UPDATE office_visits SET qr_tagged = 1 WHERE id = ?', [visit.id]);
+        if (result.affectedRows === 0) return res.status(404).json({ message: 'Visit not found for update' });
+        res.json({ message: 'QR tagged updated', id: visit.id });
+    } catch (err) {
+        console.error('Error in scanner qr_tagged update:', err);
+        res.status(500).json({ message: 'Internal server error' });
     }
-
-    const visitId = rows[0].id;
-
-    // Optional: enforce that the logged-in user's department matches the visit's dept
-    // (uncomment if you have authentication and req.user set)
-    /*
-    const userDept = req.user?.dept_id ?? null;
-    if (userDept && String(rows[0].dept_id) !== String(userDept)) {
-      return res.status(403).json({ message: 'Forbidden: your department does not match this visit' });
-    }
-    */
-
-    // Build update
-    const fields = [];
-    const values = [];
-
-    if (dept_id !== undefined) { fields.push('dept_id = ?'); values.push(dept_id); }
-    if (prof_id !== undefined) { fields.push('prof_id = ?'); values.push(prof_id); }
-    if (purpose !== undefined) { fields.push('purpose = ?'); values.push(purpose); }
-    if (qr_tagged !== undefined) { fields.push('qr_tagged = ?'); values.push(qr_tagged); }
-
-    if (fields.length === 0) return res.status(400).json({ message: 'No fields provided to update' });
-
-    values.push(visitId);
-    const [result] = await db.execute(`UPDATE office_visits SET ${fields.join(', ')} WHERE id = ?`, values);
-
-    if (result.affectedRows === 0) return res.status(404).json({ message: 'Visit not found' });
-
-    // Optional: return the updated row to the client for confirmation
-    const [updatedRows] = await db.execute('SELECT * FROM office_visits WHERE id = ?', [visitId]);
-    res.json({ message: 'Visit updated', id: visitId, visit: updatedRows[0] });
-  } catch (err) {
-    console.error('Error updating latest office_visit:', err);
-    res.status(500).json({ message: 'Internal server error' });
-  }
 });
+
 
 
 app.post('/api/departments', async (req, res) => {
@@ -797,6 +761,98 @@ app.delete('/api/departments/:id', async (req, res) => {
     }
 });
 
+
+//api || GET /api/roles - list roles
+app.get('/api/roles', async (req, res) => {
+    try {
+        const [rows] = await db.execute('SELECT * FROM roles');
+        res.json(rows);
+    } catch (error) {
+        console.error('Error fetching roles:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// ---------------- service endpoints ----------------
+// GET /api/services - list services (optional ?dept_id=)
+app.get('/api/services', async (req, res) => {
+    const { dept_id } = req.query;
+    try {
+        let query = 'SELECT id, srvc_name, dept_id, created_at FROM service';
+        const params = [];
+        if (dept_id) { query += ' WHERE dept_id = ?'; params.push(dept_id); }
+        query += ' ORDER BY created_at DESC';
+        const [rows] = await db.execute(query, params);
+        res.json(rows);
+    } catch (error) {
+        console.error('Error fetching services:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// GET /api/services/:id - get a service by id
+app.get('/api/services/:id', async (req, res) => {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ message: 'Service id is required' });
+    try {
+        const [rows] = await db.execute('SELECT id, srvc_name, dept_id, created_at FROM service WHERE id = ?', [id]);
+        if (rows.length === 0) return res.status(404).json({ message: 'Service not found' });
+        res.json(rows[0]);
+    } catch (error) {
+        console.error('Error fetching service:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// POST /api/services - create a new service
+app.post('/api/services', async (req, res) => {
+    const { srvc_name, dept_id } = req.body;
+    if (!srvc_name || !dept_id) {
+        return res.status(400).json({ message: 'srvc_name and dept_id are required' });
+    }
+    try {
+        const [result] = await db.execute('INSERT INTO service (srvc_name, dept_id) VALUES (?, ?)', [srvc_name, dept_id]);
+        res.status(201).json({ message: 'Service created', id: result.insertId });
+    } catch (error) {
+        console.error('Error creating service:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// PUT /api/services/:id - update a service
+app.put('/api/services/:id', async (req, res) => {
+    const { id } = req.params;
+    const { srvc_name, dept_id } = req.body;
+    if (!id) return res.status(400).json({ message: 'Service id is required' });
+    try {
+        const fields = [];
+        const values = [];
+        if (srvc_name !== undefined) { fields.push('srvc_name = ?'); values.push(srvc_name); }
+        if (dept_id !== undefined) { fields.push('dept_id = ?'); values.push(dept_id); }
+        if (fields.length === 0) return res.status(400).json({ message: 'No fields provided to update' });
+        values.push(id);
+        const [result] = await db.execute(`UPDATE service SET ${fields.join(', ')} WHERE id = ?`, values);
+        if (result.affectedRows === 0) return res.status(404).json({ message: 'Service not found' });
+        res.json({ message: 'Service updated', id });
+    } catch (error) {
+        console.error('Error updating service:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// DELETE /api/services/:id - delete a service
+app.delete('/api/services/:id', async (req, res) => {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ message: 'Service id is required' });
+    try {
+        const [result] = await db.execute('DELETE FROM service WHERE id = ?', [id]);
+        if (result.affectedRows === 0) return res.status(404).json({ message: 'Service not found' });
+        res.json({ message: 'Service deleted', id });
+    } catch (error) {
+        console.error('Error deleting service:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);

@@ -2,7 +2,13 @@ const express = require('express');
 const db = require('./db');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
-const { sendEmail } = require('./mailer');
+let sendEmail;
+try {
+    ({ sendEmail } = require('./mailer'));
+} catch (smtpErr) {
+    console.error('SMTP configuration error on startup:', smtpErr?.message || smtpErr);
+    process.exit(1);
+}
 require('dotenv').config();
 
 const app = express();

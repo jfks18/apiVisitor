@@ -1,12 +1,16 @@
 const nodemailer = require('nodemailer');
 
+// Validate minimal SMTP config early so we don't silently fallback to localhost
+const requiredVars = ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS'];
+const missing = requiredVars.filter((k) => !process.env[k] || String(process.env[k]).trim() === '');
+if (missing.length > 0) {
+  throw new Error(`SMTP configuration missing required env: ${missing.join(', ')}. Set them in .env or your hosting environment.`);
+}
+
 // Create a reusable transporter using SMTP settings from environment variables
-// Required env vars:
-// - SMTP_HOST
+// Optional env vars:
 // - SMTP_PORT (typically 587 for STARTTLS, 465 for SSL)
 // - SMTP_SECURE ("true" for port 465 SSL, otherwise "false")
-// - SMTP_USER
-// - SMTP_PASS
 // - SMTP_FROM (default sender address)
 
 const transporter = nodemailer.createTransport({
@@ -39,3 +43,7 @@ async function sendEmail({ to, subject, text, html, from }) {
 }
 
 module.exports = { sendEmail };
+// Optionally export a verify function for health checks
+module.exports.verifySMTP = async function verifySMTP() {
+  return transporter.verify();
+};

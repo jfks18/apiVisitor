@@ -162,6 +162,31 @@ app.post('/api/visitorslog', async (req, res) => {
     }
 });
 
+// GET /api/visitorslog - list visitor logs with optional filters
+app.get('/api/visitorslog', async (req, res) => {
+    const { visitorsID, startDate, endDate, createdAt } = req.query;
+    try {
+        let query = 'SELECT * FROM visitorslog';
+        const where = [];
+        const params = [];
+        if (visitorsID) { where.push('visitorsID = ?'); params.push(visitorsID); }
+        if (startDate && endDate && startDate !== '' && endDate !== '') {
+            where.push('DATE(createdAt) BETWEEN ? AND ?');
+            params.push(startDate, endDate);
+        } else if (createdAt && createdAt !== '') {
+            where.push('DATE(createdAt) = ?');
+            params.push(createdAt);
+        }
+        if (where.length) query += ' WHERE ' + where.join(' AND ');
+        query += ' ORDER BY createdAt DESC';
+        const [rows] = await db.execute(query, params);
+        res.json(rows);
+    } catch (error) {
+        console.error('Error fetching visitor logs:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
 app.get('/api/visitorslog/:visitorsID', async (req, res) => {
     const { visitorsID } = req.params;
     try {
@@ -618,46 +643,32 @@ app.get('/api/users/:id', async (req, res) => {
 });
 
 // ---------------- office_visits endpoints ----------------
-// GET /api/office_visits - list visits, optional filters ?visitorsID=&dept_id=&prof_id= with pagination (?page=&pageSize=)
+// GET /api/office_visits - list visits, optional filters ?visitorsID=&dept_id=&prof_id=
 app.get('/api/office_visits', async (req, res) => {
-    const { visitorsID, dept_id, prof_id } = req.query;
-    // pagination defaults: page=1, pageSize=5
-    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-    const pageSize = Math.max(parseInt(req.query.pageSize, 10) || 5, 1);
-    const offset = (page - 1) * pageSize;
+    const { visitorsID, dept_id, id } = req.query;
     try {
-        let where = '';
+        let query = 'SELECT * FROM office_visits';
         const clauses = [];
         const params = [];
         if (visitorsID) { clauses.push('visitorsID = ?'); params.push(visitorsID); }
         if (dept_id) { clauses.push('dept_id = ?'); params.push(dept_id); }
-        if (prof_id) { clauses.push('prof_id = ?'); params.push(prof_id); }
-        if (clauses.length) where = ' WHERE ' + clauses.join(' AND ');
-
-        // total count for pagination
-        const [countRows] = await db.execute(`SELECT COUNT(*) AS total FROM office_visits${where}`, params);
-        const total = Number(countRows?.[0]?.total || 0);
-        const totalPages = Math.max(Math.ceil(total / pageSize), 1);
-
-        // paged data
-        const dataParams = [...params, pageSize, offset];
-        const [rows] = await db.execute(
-            `SELECT * FROM office_visits${where} ORDER BY createdAt DESC LIMIT ? OFFSET ?`,
-            dataParams
-        );
-        res.json({ data: rows, page, pageSize, total, totalPages });
+        if (id) { clauses.push('prof_id = ?'); params.push(id); }
+        if (clauses.length) query += ' WHERE ' + clauses.join(' AND ');
+        query += ' ORDER BY createdAt DESC';
+        const [rows] = await db.execute(query, params);
+        res.json(rows);
     } catch (err) {
         console.error('Error fetching office_visits:', err);
         res.status(500).json({ message: 'Internal server error' });
     }
 });
 
-// GET /api/office_visits/:id - get single visit by visit id
+// GET /api/office_visits/:id - get single visit
 app.get('/api/office_visits/:id', async (req, res) => {
     const { id } = req.params;
     if (!id) return res.status(400).json({ message: 'Visit id is required' });
     try {
-        const [rows] = await db.execute('SELECT * FROM office_visits WHERE id = ?', [id]);
+        const [rows] = await db.execute('SELECT * FROM office_visits WHERE prof_id = ?', [id]);
         if (rows.length === 0) return res.status(404).json({ message: 'Visit not found' });
         res.json(rows[0]);
     } catch (err) {
@@ -666,25 +677,13 @@ app.get('/api/office_visits/:id', async (req, res) => {
     }
 });
 
-// GET /api/office_visits/by-professor/:prof_id - visits by professor id with pagination (?page=&pageSize=)
+// GET /api/office_visits/by-professor/:prof_id - visits by professor id
 app.get('/api/office_visits/by-professor/:prof_id', async (req, res) => {
     const { prof_id } = req.params;
     if (!prof_id) return res.status(400).json({ message: 'Professor id is required' });
-    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-    const pageSize = Math.max(parseInt(req.query.pageSize, 10) || 5, 1);
-    const offset = (page - 1) * pageSize;
     try {
-        // total for this professor
-        const [countRows] = await db.execute('SELECT COUNT(*) AS total FROM office_visits WHERE prof_id = ?', [prof_id]);
-        const total = Number(countRows?.[0]?.total || 0);
-        const totalPages = Math.max(Math.ceil(total / pageSize), 1);
-
-        // data page
-        const [rows] = await db.execute(
-            'SELECT * FROM office_visits WHERE prof_id = ? ORDER BY createdAt DESC LIMIT ? OFFSET ?',
-            [prof_id, pageSize, offset]
-        );
-        res.json({ data: rows, page, pageSize, total, totalPages });
+        const [rows] = await db.execute('SELECT * FROM office_visits WHERE prof_id = ? ORDER BY createdAt DESC', [prof_id]);
+        res.json(rows);
     } catch (err) {
         console.error('Error fetching office_visits for professor:', err);
         res.status(500).json({ message: 'Internal server error' });

@@ -297,7 +297,7 @@ app.post('/api/login', async (req, res) => {
         const adminToken = crypto.randomBytes(32).toString('hex');
         // set token and mark status active
         await db.execute('UPDATE users SET token = ?, status = ? WHERE id = ?', [adminToken, 'active', user.id]);
-        const [updatedRows] = await db.execute('SELECT id, username, email, phone, dept_id, token, role , status, createdAt FROM users WHERE id = ?', [user.id]);
+        const [updatedRows] = await db.execute('SELECT id, username, email, phone, dept_id, token, role , prof_id, status, createdAt FROM users WHERE id = ?', [user.id]);
         const userUpdated = updatedRows[0];
         res.json({ message: 'Login successful', user: userUpdated });
     } catch (error) {
@@ -307,8 +307,8 @@ app.post('/api/login', async (req, res) => {
 });
 
 // Logout - clear token and set status inactive
-app.post('/api/users', async (req, res) => {
-    const { username, email, phone, password, dept_id, status, role } = req.body;
+app.post('/api/logout', async (req, res) => {
+    const { username } = req.body;
     if (!username) {
         return res.status(400).json({ message: 'Username is required.' });
     }
@@ -316,16 +316,14 @@ app.post('/api/users', async (req, res) => {
         const [result] = await db.execute('UPDATE users SET token = NULL, status = ? WHERE username = ?', ['inactive', username]);
         if (result.affectedRows === 0) return res.status(404).json({ message: 'User not found' });
         res.json({ message: 'Logout successful', username });
-        // default role to 2 if not provided
-        const finalRole = role ?? 2;
     } catch (error) {
-            'INSERT INTO users (username, email, phone, password, dept_id, status, role) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [username, email, phone, hashed, dept_id || null, finalStatus, finalRole]
+        console.error('Logout error:', error);
+        res.status(500).json({ message: 'Internal server error' });
     }
-        res.status(201).json({ message: 'User created', id: result.insertId, status: finalStatus, role: finalRole });
+});
 
 app.post('/api/users', async (req, res) => {
-    const { username, email, phone, password, dept_id, status } = req.body;
+    const { username, email, phone, password, dept_id, status, role } = req.body;
     if (!username || !email || !phone || !password) {
         return res.status(400).json({ message: 'username, email, phone and password are required' });
     }
@@ -333,11 +331,13 @@ app.post('/api/users', async (req, res) => {
         const hashed = await bcrypt.hash(password, 10);
         // default status to 'inactive' if not provided
         const finalStatus = status || 'inactive';
+        // default role to 2 if not provided
+        const finalRole = role ?? 2;
         const [result] = await db.execute(
-            'INSERT INTO users (username, email, phone, password, dept_id, status) VALUES (?, ?, ?, ?, ?, ?)',
-            [username, email, phone, hashed, dept_id || null, finalStatus]
+            'INSERT INTO users (username, email, phone, password, dept_id, status, role) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [username, email, phone, hashed, dept_id || null, finalStatus, finalRole]
         );
-        res.status(201).json({ message: 'User created', id: result.insertId, status: finalStatus });
+        res.status(201).json({ message: 'User created', id: result.insertId, status: finalStatus, role: finalRole });
     } catch (err) {
         console.error('Error creating user:', err);
         if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'User already exists' });
@@ -639,15 +639,118 @@ app.get('/api/office_visits', async (req, res) => {
 });
 
 // GET /api/office_visits/:id - get single visit
-app.get('/api/office_visits/:prof_id', async (req, res) => {
+app.get('/api/office_visits/:id', async (req, res) => {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ message: 'Visit id is required' });
+    try {
+        const [rows] = await db.execute('SELECT * FROM office_visits WHERE id = ?', [id]);
+        if (rows.length === 0) return res.status(404).json({ message: 'Visit not found' });
+        res.json(rows[0]);
+    } catch (err) {
+        console.error('Error fetching office_visit:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// GET /api/office_visits/by-professor/:prof_id - visits by professor id
+app.get('/api/office_visits/by-professor/:prof_id', async (req, res) => {
     const { prof_id } = req.params;
     if (!prof_id) return res.status(400).json({ message: 'Professor id is required' });
     try {
         const [rows] = await db.execute('SELECT * FROM office_visits WHERE prof_id = ? ORDER BY createdAt DESC', [prof_id]);
-        if (rows.length === 0) return res.status(404).json({ message: 'No visits found for this professor' });
         res.json(rows);
     } catch (err) {
         console.error('Error fetching office_visits for professor:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// -------- Professor-Users association CRUD --------
+// GET /api/professor-users - list users joined with professors (where users.prof_id not null)
+app.get('/api/professor-users', async (req, res) => {
+    try {
+        const [rows] = await db.execute(`
+            SELECT u.id AS user_id, u.username, u.email, u.phone, u.dept_id, u.role, u.prof_id,
+                   p.id AS professor_id, p.first_name, p.last_name, p.middle_name, p.email AS prof_email, p.department
+            FROM users u
+            LEFT JOIN professors p ON u.prof_id = p.id
+            WHERE u.prof_id IS NOT NULL
+            ORDER BY u.createdAt DESC
+        `);
+        res.json(rows);
+    } catch (err) {
+        console.error('Error listing professor-users:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// GET /api/professor-users/:userId - single user joined with professor
+app.get('/api/professor-users/:userId', async (req, res) => {
+    const { userId } = req.params;
+    if (!userId) return res.status(400).json({ message: 'User id is required' });
+    try {
+        const [rows] = await db.execute(`
+            SELECT u.id AS user_id, u.username, u.email, u.phone, u.dept_id, u.role, u.prof_id,
+                   p.id AS professor_id, p.first_name, p.last_name, p.middle_name, p.email AS prof_email, p.department
+            FROM users u
+            LEFT JOIN professors p ON u.prof_id = p.id
+            WHERE u.id = ?
+        `, [userId]);
+        if (rows.length === 0) return res.status(404).json({ message: 'User not found' });
+        res.json(rows[0]);
+    } catch (err) {
+        console.error('Error fetching professor-user:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// POST /api/professor-users - link a user to a professor (set users.prof_id)
+app.post('/api/professor-users', async (req, res) => {
+    const { user_id, prof_id } = req.body;
+    if (!user_id || !prof_id) return res.status(400).json({ message: 'user_id and prof_id are required' });
+    try {
+        // validate user exists
+        const [u] = await db.execute('SELECT id FROM users WHERE id = ?', [user_id]);
+        if (u.length === 0) return res.status(404).json({ message: 'User not found' });
+        // validate professor exists
+        const [p] = await db.execute('SELECT id FROM professors WHERE id = ?', [prof_id]);
+        if (p.length === 0) return res.status(404).json({ message: 'Professor not found' });
+        const [result] = await db.execute('UPDATE users SET prof_id = ? WHERE id = ?', [prof_id, user_id]);
+        if (result.affectedRows === 0) return res.status(404).json({ message: 'User not found' });
+        res.status(200).json({ message: 'Professor linked to user', user_id, prof_id });
+    } catch (err) {
+        console.error('Error linking professor to user:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// PUT /api/professor-users/:userId - change linked professor for a user
+app.put('/api/professor-users/:userId', async (req, res) => {
+    const { userId } = req.params;
+    const { prof_id } = req.body;
+    if (!userId || prof_id === undefined) return res.status(400).json({ message: 'userId and prof_id are required' });
+    try {
+        const [p] = await db.execute('SELECT id FROM professors WHERE id = ?', [prof_id]);
+        if (p.length === 0) return res.status(404).json({ message: 'Professor not found' });
+        const [result] = await db.execute('UPDATE users SET prof_id = ? WHERE id = ?', [prof_id, userId]);
+        if (result.affectedRows === 0) return res.status(404).json({ message: 'User not found' });
+        res.json({ message: 'Professor link updated', user_id: Number(userId), prof_id });
+    } catch (err) {
+        console.error('Error updating professor link:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// DELETE /api/professor-users/:userId - unlink professor from user (set prof_id to NULL)
+app.delete('/api/professor-users/:userId', async (req, res) => {
+    const { userId } = req.params;
+    if (!userId) return res.status(400).json({ message: 'User id is required' });
+    try {
+        const [result] = await db.execute('UPDATE users SET prof_id = NULL WHERE id = ?', [userId]);
+        if (result.affectedRows === 0) return res.status(404).json({ message: 'User not found' });
+        res.json({ message: 'Professor unlinked from user', user_id: Number(userId) });
+    } catch (err) {
+        console.error('Error unlinking professor from user:', err);
         res.status(500).json({ message: 'Internal server error' });
     }
 });

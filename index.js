@@ -636,15 +636,15 @@ app.get('/api/office_visits', async (req, res) => {
 });
 
 // GET /api/office_visits/:id - get single visit
-app.get('/api/office_visits/:id', async (req, res) => {
-    const { id } = req.params;
-    if (!id) return res.status(400).json({ message: 'Visit id is required' });
+app.get('/api/office_visits/:prof_id', async (req, res) => {
+    const { prof_id } = req.params;
+    if (!prof_id) return res.status(400).json({ message: 'Professor id is required' });
     try {
-        const [rows] = await db.execute('SELECT * FROM office_visits WHERE id = ?', [id]);
-        if (rows.length === 0) return res.status(404).json({ message: 'Visit not found' });
-        res.json(rows[0]);
+        const [rows] = await db.execute('SELECT * FROM office_visits WHERE prof_id = ? ORDER BY createdAt DESC', [prof_id]);
+        if (rows.length === 0) return res.status(404).json({ message: 'No visits found for this professor' });
+        res.json(rows);
     } catch (err) {
-        console.error('Error fetching office_visit:', err);
+        console.error('Error fetching office_visits for professor:', err);
         res.status(500).json({ message: 'Internal server error' });
     }
 });

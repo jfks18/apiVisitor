@@ -349,12 +349,17 @@ app.post('/api/logout', async (req, res) => {
 });
 
 app.post('/api/users', async (req, res) => {
-    const { username, email, phone, password, dept_id, status, role } = req.body;
-    if (!username || !email || !phone || !password) {
-        return res.status(400).json({ message: 'username, email, phone and password are required' });
+    const { username, email, phone, password, dept_id, status, role } = req.body || {};
+    if (!username || !email || !phone) {
+        return res.status(400).json({ message: 'username, email and phone are required' });
     }
     try {
-        const hashed = await bcrypt.hash(password, 10);
+        // If password not provided, generate a temporary one
+        const plainPassword = password && String(password).trim() !== ''
+            ? String(password)
+            : crypto.randomBytes(8).toString('hex'); // 16-char hex temp password
+
+        const hashed = await bcrypt.hash(plainPassword, 10);
         // default status to 'inactive' if not provided
         const finalStatus = status || 'inactive';
         // default role to 2 if not provided
@@ -363,7 +368,29 @@ app.post('/api/users', async (req, res) => {
             'INSERT INTO users (username, email, phone, password, dept_id, status, role) VALUES (?, ?, ?, ?, ?, ?, ?)',
             [username, email, phone, hashed, dept_id || null, finalStatus, finalRole]
         );
-        res.status(201).json({ message: 'User created', id: result.insertId, status: finalStatus, role: finalRole });
+
+        // Attempt to email the credentials to the user
+        let emailSent = false;
+        let emailError = undefined;
+        try {
+            const subject = 'Your account has been created';
+            const text = `Hello ${username},\n\nYour account has been created.\n\nUsername: ${username}\nPassword: ${plainPassword}\n\nFor your security, please sign in and change your password immediately.`;
+            const html = `<p>Hello ${username},</p><p>Your account has been created.</p><p><b>Username:</b> ${username}<br/><b>Password:</b> ${plainPassword}</p><p>For your security, please sign in and change your password immediately.</p>`;
+            await sendEmail({ to: email, subject, text, html });
+            emailSent = true;
+        } catch (mailErr) {
+            emailError = mailErr?.message || String(mailErr);
+            console.error('Email send failed (user created):', mailErr);
+        }
+
+        res.status(201).json({
+            message: 'User created',
+            id: result.insertId,
+            status: finalStatus,
+            role: finalRole,
+            emailSent,
+            emailError: emailSent ? undefined : emailError
+        });
     } catch (err) {
         console.error('Error creating user:', err);
         if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'User already exists' });

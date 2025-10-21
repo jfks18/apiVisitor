@@ -618,27 +618,41 @@ app.get('/api/users/:id', async (req, res) => {
 });
 
 // ---------------- office_visits endpoints ----------------
-// GET /api/office_visits - list visits, optional filters ?visitorsID=&dept_id=&prof_id=
+// GET /api/office_visits - list visits, optional filters ?visitorsID=&dept_id=&prof_id= with pagination (?page=&pageSize=)
 app.get('/api/office_visits', async (req, res) => {
     const { visitorsID, dept_id, prof_id } = req.query;
+    // pagination defaults: page=1, pageSize=5
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const pageSize = Math.max(parseInt(req.query.pageSize, 10) || 5, 1);
+    const offset = (page - 1) * pageSize;
     try {
-        let query = 'SELECT * FROM office_visits';
+        let where = '';
         const clauses = [];
         const params = [];
         if (visitorsID) { clauses.push('visitorsID = ?'); params.push(visitorsID); }
         if (dept_id) { clauses.push('dept_id = ?'); params.push(dept_id); }
         if (prof_id) { clauses.push('prof_id = ?'); params.push(prof_id); }
-        if (clauses.length) query += ' WHERE ' + clauses.join(' AND ');
-        query += ' ORDER BY createdAt DESC';
-        const [rows] = await db.execute(query, params);
-        res.json(rows);
+        if (clauses.length) where = ' WHERE ' + clauses.join(' AND ');
+
+        // total count for pagination
+        const [countRows] = await db.execute(`SELECT COUNT(*) AS total FROM office_visits${where}`, params);
+        const total = Number(countRows?.[0]?.total || 0);
+        const totalPages = Math.max(Math.ceil(total / pageSize), 1);
+
+        // paged data
+        const dataParams = [...params, pageSize, offset];
+        const [rows] = await db.execute(
+            `SELECT * FROM office_visits${where} ORDER BY createdAt DESC LIMIT ? OFFSET ?`,
+            dataParams
+        );
+        res.json({ data: rows, page, pageSize, total, totalPages });
     } catch (err) {
         console.error('Error fetching office_visits:', err);
         res.status(500).json({ message: 'Internal server error' });
     }
 });
 
-// GET /api/office_visits/:id - get single visit
+// GET /api/office_visits/:id - get single visit by visit id
 app.get('/api/office_visits/:id', async (req, res) => {
     const { id } = req.params;
     if (!id) return res.status(400).json({ message: 'Visit id is required' });
@@ -652,13 +666,25 @@ app.get('/api/office_visits/:id', async (req, res) => {
     }
 });
 
-// GET /api/office_visits/by-professor/:prof_id - visits by professor id
+// GET /api/office_visits/by-professor/:prof_id - visits by professor id with pagination (?page=&pageSize=)
 app.get('/api/office_visits/by-professor/:prof_id', async (req, res) => {
     const { prof_id } = req.params;
     if (!prof_id) return res.status(400).json({ message: 'Professor id is required' });
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const pageSize = Math.max(parseInt(req.query.pageSize, 10) || 5, 1);
+    const offset = (page - 1) * pageSize;
     try {
-        const [rows] = await db.execute('SELECT * FROM office_visits WHERE prof_id = ? ORDER BY createdAt DESC', [prof_id]);
-        res.json(rows);
+        // total for this professor
+        const [countRows] = await db.execute('SELECT COUNT(*) AS total FROM office_visits WHERE prof_id = ?', [prof_id]);
+        const total = Number(countRows?.[0]?.total || 0);
+        const totalPages = Math.max(Math.ceil(total / pageSize), 1);
+
+        // data page
+        const [rows] = await db.execute(
+            'SELECT * FROM office_visits WHERE prof_id = ? ORDER BY createdAt DESC LIMIT ? OFFSET ?',
+            [prof_id, pageSize, offset]
+        );
+        res.json({ data: rows, page, pageSize, total, totalPages });
     } catch (err) {
         console.error('Error fetching office_visits for professor:', err);
         res.status(500).json({ message: 'Internal server error' });
@@ -670,7 +696,7 @@ app.get('/api/office_visits/by-professor/:prof_id', async (req, res) => {
 app.get('/api/professor-users', async (req, res) => {
     try {
         const [rows] = await db.execute(`
-            SELECT u.id AS user_id, u.username, u.email, u.phone, u.dept_id, u.role, u.prof_id,
+            SELECT u.id AS user_id, u.username, u.email, u.phone, u.dept_id, u.role, u.prof_id, u.status,
                    p.id AS professor_id, p.first_name, p.last_name, p.middle_name, p.email AS prof_email, p.department
             FROM users u
             LEFT JOIN professors p ON u.prof_id = p.id
@@ -685,24 +711,24 @@ app.get('/api/professor-users', async (req, res) => {
 });
 
 // GET /api/professor-users/:userId - single user joined with professor
-app.get('/api/professor-users/:userId', async (req, res) => {
-    const { userId } = req.params;
-    if (!userId) return res.status(400).json({ message: 'User id is required' });
-    try {
-        const [rows] = await db.execute(`
-            SELECT u.id AS user_id, u.username, u.email, u.phone, u.dept_id, u.role, u.prof_id,
-                   p.id AS professor_id, p.first_name, p.last_name, p.middle_name, p.email AS prof_email, p.department
-            FROM users u
-            LEFT JOIN professors p ON u.prof_id = p.id
-            WHERE u.id = ?
-        `, [userId]);
-        if (rows.length === 0) return res.status(404).json({ message: 'User not found' });
-        res.json(rows[0]);
-    } catch (err) {
-        console.error('Error fetching professor-user:', err);
-        res.status(500).json({ message: 'Internal server error' });
-    }
-});
+    app.get('/api/professor-users/:userId', async (req, res) => {
+        const { userId } = req.params;
+        if (!userId) return res.status(400).json({ message: 'User id is required' });
+        try {
+            const [rows] = await db.execute(`
+                SELECT u.id AS user_id, u.username, u.email, u.phone, u.dept_id, u.role, u.prof_id, u.status,
+                    p.id AS professor_id, p.first_name, p.last_name, p.middle_name, p.email AS prof_email, p.department
+                FROM users u
+                LEFT JOIN professors p ON u.prof_id = p.id
+                WHERE p.id = ?
+            `, [userId]);
+            if (rows.length === 0) return res.status(404).json({ message: 'User not found' });
+            res.json(rows[0]);
+        } catch (err) {
+            console.error('Error fetching professor-user:', err);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
 
 // POST /api/professor-users - link a user to a professor (set users.prof_id)
 app.post('/api/professor-users', async (req, res) => {
@@ -751,6 +777,100 @@ app.delete('/api/professor-users/:userId', async (req, res) => {
         res.json({ message: 'Professor unlinked from user', user_id: Number(userId) });
     } catch (err) {
         console.error('Error unlinking professor from user:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// PUT /api/professor-users/by-professor/:prof_id - update professor data and any linked users by prof_id
+app.put('/api/professor-users/by-professor/:prof_id', async (req, res) => {
+    const { prof_id } = req.params;
+    const { professor, user } = req.body || {};
+    if (!prof_id) return res.status(400).json({ message: 'prof_id is required' });
+
+    // Build professor update if provided
+    const profFields = [];
+    const profValues = [];
+    if (professor && typeof professor === 'object') {
+        const {
+            first_name,
+            last_name,
+            middle_name,
+            birth_date,
+            phone,
+            email,
+            position,
+            department
+        } = professor;
+        if (first_name !== undefined) { profFields.push('first_name = ?'); profValues.push(first_name); }
+        if (last_name !== undefined) { profFields.push('last_name = ?'); profValues.push(last_name); }
+        if (middle_name !== undefined) { profFields.push('middle_name = ?'); profValues.push(middle_name); }
+        if (birth_date !== undefined) { profFields.push('birth_date = ?'); profValues.push(birth_date); }
+        if (phone !== undefined) { profFields.push('phone = ?'); profValues.push(phone); }
+        if (email !== undefined) { profFields.push('email = ?'); profValues.push(email); }
+        if (position !== undefined) { profFields.push('position = ?'); profValues.push(position); }
+        if (department !== undefined) { profFields.push('department = ?'); profValues.push(department); }
+    }
+
+    // Build user update if provided (applies to all users with this prof_id)
+    const userFields = [];
+    const userValues = [];
+    let userPasswordToHash = undefined;
+    if (user && typeof user === 'object') {
+        const {
+            username,
+            email: user_email,
+            phone: user_phone,
+            dept_id,
+            status,
+            role,
+            password
+        } = user;
+        if (username !== undefined) { userFields.push('username = ?'); userValues.push(username); }
+        if (user_email !== undefined) { userFields.push('email = ?'); userValues.push(user_email); }
+        if (user_phone !== undefined) { userFields.push('phone = ?'); userValues.push(user_phone); }
+        if (dept_id !== undefined) { userFields.push('dept_id = ?'); userValues.push(dept_id); }
+        if (status !== undefined) { userFields.push('status = ?'); userValues.push(status); }
+        if (role !== undefined) { userFields.push('role = ?'); userValues.push(role); }
+        if (password !== undefined) { userPasswordToHash = password; }
+    }
+
+    if (profFields.length === 0 && userFields.length === 0 && userPasswordToHash === undefined) {
+        return res.status(400).json({ message: 'No fields provided to update for professor or user' });
+    }
+
+    try {
+        let updatedProfessor = 0;
+        let updatedUsers = 0;
+
+        // Update professor first if specified
+        if (profFields.length > 0) {
+            const params = [...profValues, prof_id];
+            const [profRes] = await db.execute(`UPDATE professors SET ${profFields.join(', ')} WHERE id = ?`, params);
+            if (profRes.affectedRows === 0) return res.status(404).json({ message: 'Professor not found' });
+            updatedProfessor = profRes.affectedRows;
+        }
+
+        // If password is provided, hash once (applied to all linked users)
+        if (userPasswordToHash !== undefined) {
+            const hashed = await bcrypt.hash(userPasswordToHash, 10);
+            userFields.push('password = ?');
+            userValues.push(hashed);
+        }
+
+        if (userFields.length > 0) {
+            const params = [...userValues, prof_id];
+            const [userRes] = await db.execute(`UPDATE users SET ${userFields.join(', ')} WHERE prof_id = ?`, params);
+            updatedUsers = userRes.affectedRows || 0;
+        }
+
+        return res.json({
+            message: 'Professor/users updated',
+            prof_id: Number(prof_id),
+            updatedProfessor,
+            updatedUsers
+        });
+    } catch (err) {
+        console.error('Error updating by professor id:', err);
         res.status(500).json({ message: 'Internal server error' });
     }
 });

@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('./db');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
+const { sendEmail } = require('./mailer');
 require('dotenv').config();
 
 const app = express();
@@ -367,6 +368,23 @@ app.post('/api/users', async (req, res) => {
         console.error('Error creating user:', err);
         if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'User already exists' });
         res.status(500).json({ message: 'Internal server error' });
+    }
+});
+
+// ---------------- email endpoints ----------------
+// POST /api/email/send - send an email via SMTP
+// Body: { to: string | string[], subject: string, text?: string, html?: string, from?: string }
+app.post('/api/email/send', async (req, res) => {
+    const { to, subject, text, html, from } = req.body || {};
+    if (!to || !subject) {
+        return res.status(400).json({ message: 'to and subject are required' });
+    }
+    try {
+        const result = await sendEmail({ to, subject, text, html, from });
+        res.status(200).json({ message: 'Email sent', ...result });
+    } catch (err) {
+        console.error('Error sending email:', err);
+        res.status(500).json({ message: 'Failed to send email', error: err?.message || String(err) });
     }
 });
 
@@ -1020,7 +1038,7 @@ app.get('/api/services/:id', async (req, res) => {
     const { id } = req.params;
     if (!id) return res.status(400).json({ message: 'Service id is required' });
     try {
-        const [rows] = await db.execute('SELECT id, srvc_name, dept_id, created_at FROM service WHERE id = ?', [id]);
+        const [rows] = await db.execute('SELECT id, srvc_name, dept_id, created_at FROM service WHERE dept_id = ?', [id]);
         if (rows.length === 0) return res.status(404).json({ message: 'Service not found' });
         res.json(rows[0]);
     } catch (error) {

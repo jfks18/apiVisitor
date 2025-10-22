@@ -493,7 +493,22 @@ app.get('/api/professors/department/:departmentId', async (req, res) => {
     const { departmentId } = req.params;
     try {
         const [rows] = await db.execute(
-            'SELECT * FROM professors WHERE department = ? ORDER BY createdAt DESC',
+            `SELECT p.*,
+                    (
+                        SELECT u.id FROM users u
+                        WHERE u.prof_id = p.id
+                        ORDER BY u.createdAt DESC
+                        LIMIT 1
+                    ) AS user_id,
+                    (
+                        SELECT u.status FROM users u
+                        WHERE u.prof_id = p.id
+                        ORDER BY u.createdAt DESC
+                        LIMIT 1
+                    ) AS user_status
+             FROM professors p
+             WHERE p.department = ?
+             ORDER BY p.createdAt DESC`,
             [departmentId]
         );
         res.json(rows);
